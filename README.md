@@ -74,6 +74,16 @@ or no functions.
 (by count, not by lines) with cyclomatic complexity greater than 10. It is not
 part of the score.
 
+### Gaming the score
+
+Splitting a big function into many small ones lowers C and L without removing
+any logic. It also raises `total_ccn` by 1 per new function, and raises the
+tiny-function and chain-candidate counts in `diagnostics`. Use
+`decision_points` (`total_ccn - analyzed_functions`, the number of branches and
+conditions) as the split-proof total: a refactor that does not remove behavior
+should not increase it. In review, compare `decision_points` between base and
+head.
+
 ## JSON fields
 
 | Field | Description |
@@ -88,6 +98,8 @@ part of the score.
 | `length_percent` | L, rounded to 2 decimals, or `null`. |
 | `analyzed_files` | Number of files Lizard parsed. |
 | `analyzed_functions` | Number of functions found. |
+| `total_ccn` | Sum of cyclomatic complexity over all functions. |
+| `decision_points` | `total_ccn - analyzed_functions`: number of branches and conditions. Does not change when a function is split. |
 | `top_complexity` | Up to 10 functions: `file`, `line`, `name`, `ccn`. |
 | `long_functions` | Up to 10 functions: `file`, `line`, `name`, `nloc`. |
 | `duplicates` | Up to 10 duplicate blocks: `lines` and `locations` (`file`, `start_line`, `end_line`). |

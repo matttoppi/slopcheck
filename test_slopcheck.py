@@ -96,6 +96,8 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(r["score"], round(100 - (0.5 * c + 0.3 * d + 0.2 * l)))
         self.assertEqual(r["top_complexity"][0]["name"], "Calc::Complex")
         self.assertEqual(r["top_complexity"][0]["ccn"], 13)
+        self.assertEqual(r["total_ccn"], sum(f["ccn"] for f in r["top_complexity"]))
+        self.assertEqual(r["decision_points"], r["total_ccn"] - 3)
 
     def test_long_function(self):
         long_fn = "export function longOne(): number {\n    let total = 0;\n" + "    total = total + 1;\n" * 120

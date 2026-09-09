@@ -241,6 +241,7 @@ def scan(root, excludes=()):
 
     functions = [fn for info in infos for fn in info.function_list]
     total_nloc = sum(fn.nloc for fn in functions)
+    total_ccn = sum(fn.cyclomatic_complexity for fn in functions)
     complex_fns = [fn for fn in functions if fn.cyclomatic_complexity > CCN_THRESHOLD]
     long_fns = [fn for fn in functions if fn.nloc > LONG_FUNCTION_NLOC]
     share = lambda fns: _clamp(100.0 * sum(fn.nloc for fn in fns) / total_nloc) if total_nloc else None  # noqa: E731
@@ -287,6 +288,8 @@ def scan(root, excludes=()):
         "length_percent": pct(length),
         "analyzed_files": len(infos),
         "analyzed_functions": len(functions),
+        "total_ccn": total_ccn,
+        "decision_points": total_ccn - len(functions),
         "top_complexity": ranked("ccn", "cyclomatic_complexity"),
         "long_functions": ranked("nloc", "nloc"),
         "duplicates": duplicates[:TOP_N],
@@ -334,6 +337,7 @@ def render_text(result):
         f"Duplication (tokens in blocks >= {MIN_DUPLICATE_TOKENS} tokens): {pct(result['duplication_percent'])}",
         f"Length (lines in functions > {LONG_FUNCTION_NLOC} lines): {pct(result['length_percent'])}",
         f"Analyzed: {result['analyzed_files']} files, {result['analyzed_functions']} functions",
+        f"Decision points: {result['decision_points']} (total CCN {result['total_ccn']})",
     ]
     if result["top_complexity"]:
         lines += ["", "Top complexity:"]
