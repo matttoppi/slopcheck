@@ -35,6 +35,7 @@ MAX_COMMIT_FILES = 50
 MIN_SHARED_COMMITS = 5
 MIN_COUPLING_RATIO = 0.8
 MIN_NAME_LEN = 4
+LARGE_FILE_NLOC = 750
 
 INTERFACE_DECL = re.compile(r"\binterface\s+(I[A-Z]\w*)")
 TYPE_BASES = re.compile(r"\b(?:class|record|struct)\s+(\w+)[^{;=]*?:\s*([^{;=]+)")
@@ -205,6 +206,18 @@ def single_caller_chains(infos, functions, rel):
     }
 
 
+def large_files(infos, rel):
+    if not infos:
+        return None
+    total = sum(info.nloc for info in infos)
+    large = sorted((info for info in infos if info.nloc > LARGE_FILE_NLOC), key=lambda i: (-i.nloc, rel(i.filename)))
+    return {
+        "count": len(large),
+        "percent_of_lines": round(100.0 * sum(i.nloc for i in large) / total, 2) if total else None,
+        "examples": [{"file": rel(i.filename), "nloc": i.nloc} for i in large[:TOP_N]],
+    }
+
+
 def diagnostics(root, rel, infos, functions):
     tiny = [fn for fn in functions if fn.nloc <= TINY_FUNCTION_NLOC]
     cs_files = [info.filename for info in infos if info.filename.lower().endswith(".cs")]
@@ -225,6 +238,7 @@ def diagnostics(root, rel, infos, functions):
         )[:TOP_N]
     return {
         "tiny_functions_percent": round(100.0 * len(tiny) / len(functions), 2) if functions else None,
+        "large_files": large_files(infos, rel),
         "single_implementation_interfaces": single_implementation_interfaces(cs_files, rel),
         "single_caller_chains": single_caller_chains(infos, functions, rel),
         "change_coupling": coupling,
@@ -353,6 +367,11 @@ def render_text(result):
     diag = result["diagnostics"]
     lines += ["", "Diagnostics (not in score):",
               f"  Tiny functions (<= {TINY_FUNCTION_NLOC} lines): {pct(diag['tiny_functions_percent'])}"]
+    lf = diag["large_files"]
+    if lf is not None:
+        lines.append(f"  Large files (> {LARGE_FILE_NLOC} lines): {lf['count']} files holding"
+                     f" {pct(lf['percent_of_lines'])} of lines")
+        lines += [f"    {e['nloc']:>5}  {e['file']}" for e in lf["examples"]]
     scc = diag["single_caller_chains"]
     if scc is None:
         lines.append("  Single-caller chain candidates: n/a (no named functions)")

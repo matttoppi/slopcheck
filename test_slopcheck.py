@@ -248,6 +248,14 @@ class ScanTests(unittest.TestCase):
         r = slopcheck.scan(self.root)
         self.assertAlmostEqual(r["diagnostics"]["tiny_functions_percent"], 200 / 3, places=2)
 
+    def test_large_files(self):
+        write(self.root, "calc.cs", CS_SOURCE)
+        write(self.root, "big.ts", "".join(f"export const v{i} = {i};\n" for i in range(800)))
+        lf = slopcheck.scan(self.root)["diagnostics"]["large_files"]
+        self.assertEqual(lf["count"], 1)
+        self.assertEqual(lf["examples"][0]["file"], "big.ts")
+        self.assertGreater(lf["percent_of_lines"], 50)
+
     def test_single_impl_interfaces(self):
         write(self.root, "ifaces.cs", "interface IOne {}\ninterface ITwo {}\ninterface IThree<T> {}\n"
               "class A : IOne {}\nclass B : Base, ITwo {}\nrecord C : ITwo, IThree<int> {}\n")
