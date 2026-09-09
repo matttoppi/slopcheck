@@ -140,10 +140,13 @@ touch more than 50 analyzed files are skipped as bulk edits.
 - These directory names are always excluded: `.git .hg .svn node_modules
   bower_components vendor packages bin obj dist build out target .next .nuxt
   coverage __pycache__ .venv venv .tox .mypy_cache .pytest_cache .idea .vs
-  .vscode .terraform`.
+  .vscode .terraform Migrations migrations`.
 - These generated-file patterns are always excluded: `*.g.cs *.g.i.cs
   *.designer.cs *.generated.cs *.Designer.cs *.min.js *.min.css *.d.ts
-  *.generated.ts *.pb.go *_pb2.py *_pb2_grpc.py *.bundle.js *.js.map *.lock`.
+  *.generated.ts *.pb.go *_pb2.py *_pb2_grpc.py *.bundle.js *.js.map *.lock
+  *ModelSnapshot.cs`.
+- Database migrations and EF model snapshots are excluded by default because
+  they are schema history, not maintained code.
 - Test files are included.
 - Only files that have a Lizard reader are analyzed. Other files are counted in
   `skipped_unsupported`.

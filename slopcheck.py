@@ -44,13 +44,13 @@ IDENTIFIER = re.compile(r"\b[A-Za-z_]\w*\b")
 EXCLUDED_DIRS = frozenset("""
 .git .hg .svn node_modules bower_components vendor packages bin obj dist build
 out target .next .nuxt coverage __pycache__ .venv venv .tox .mypy_cache
-.pytest_cache .idea .vs .vscode .terraform
+.pytest_cache .idea .vs .vscode .terraform Migrations migrations
 """.split())
 
 GENERATED_PATTERNS = [
     "*.g.cs", "*.g.i.cs", "*.designer.cs", "*.generated.cs", "*.Designer.cs",
     "*.min.js", "*.min.css", "*.d.ts", "*.generated.ts", "*.pb.go",
-    "*_pb2.py", "*_pb2_grpc.py", "*.bundle.js", "*.js.map", "*.lock",
+    "*_pb2.py", "*_pb2_grpc.py", "*.bundle.js", "*.js.map", "*.lock", "*ModelSnapshot.cs",
 ]
 
 

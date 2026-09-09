@@ -146,11 +146,15 @@ class ScanTests(unittest.TestCase):
         write(self.root, "sub/local.ts", TS_FUNCTION.format(name="loc"))
         write(self.root, "sub/kept.ts", TS_FUNCTION.format(name="kept"))
         write(self.root, "skip/s.ts", TS_FUNCTION.format(name="skipped"))
+        write(self.root, "Migrations/20260101_Init.cs", huge)
+        write(self.root, "supabase/migrations/001_init.sql",
+              "create function f() returns int as $$ begin if 1=1 then return 1; end if; return 0; end $$ language plpgsql;\n")
         r = slopcheck.scan(self.root, ["skip/"])
         self.assertEqual(r["analyzed_files"], 3)  # calc.cs, util.ts, sub/kept.ts
         found = files_in(r)
         self.assertIn("sub/kept.ts", found)
-        for bad in ("node_modules/x.ts", "bin/y.cs", "gen.g.cs", "ignored/z.ts", "sub/local.ts", "skip/s.ts"):
+        for bad in ("node_modules/x.ts", "bin/y.cs", "gen.g.cs", "ignored/z.ts", "sub/local.ts", "skip/s.ts",
+                    "Migrations/20260101_Init.cs", "supabase/migrations/001_init.sql"):
             self.assertNotIn(bad, found)
         self.assertEqual(r["top_complexity"][0]["ccn"], 13)
 
