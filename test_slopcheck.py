@@ -93,9 +93,10 @@ class ScanTests(unittest.TestCase):
         self.assertTrue(0 < r["complexity_percent"] < 100)
         self.assertEqual(r["length_percent"], 0.0)
         self.assertEqual(r["file_size_percent"], 0.0)
-        c, d, l, f = (r["complexity_percent"], r["duplication_percent"], r["length_percent"],
-                      r["file_size_percent"])
-        self.assertEqual(r["score"], round(100 - (0.4 * c + 0.25 * d + 0.15 * l + 0.2 * f)))
+        self.assertEqual(r["duplication_lines_percent"], 0.0)
+        self.assertGreater(r["unclean_lines"], 0)
+        self.assertGreater(r["total_lines"], r["unclean_lines"])
+        self.assertEqual(r["score"], round(100 - r["complexity_percent"]))
         self.assertEqual(r["top_complexity"][0]["name"], "Calc::Complex")
         self.assertEqual(r["top_complexity"][0]["ccn"], 13)
         self.assertEqual(r["total_ccn"], sum(f["ccn"] for f in r["top_complexity"]))
@@ -109,12 +110,25 @@ class ScanTests(unittest.TestCase):
         self.assertGreater(r["length_percent"], 0)
         self.assertEqual(r["long_functions"][0]["name"], "longOne")
         self.assertGreater(r["long_functions"][0]["nloc"], 100)
+        self.assertLess(r["score"], 100)
+
+    def test_overlap_counts_once(self):
+        body = "".join(f"    if (a === {i}) {{ total = total + {i}; }}\n" for i in range(12))
+        body += "    total = total + 1;\n" * 100
+        write(self.root, "both.ts", "export function both(a: number): number {\n    let total = 0;\n" + body
+              + "    return total;\n}\n")
+        r = slopcheck.scan(self.root)
+        self.assertGreater(r["complexity_percent"], 0)
+        self.assertEqual(r["complexity_percent"], r["length_percent"])
+        self.assertEqual(r["score"], round(100 - r["complexity_percent"]))
 
     def test_duplicate_detection(self):
         base_fixture(self.root)
         r = slopcheck.scan(self.root)
         self.assertTrue(r["duplicates"])
         self.assertGreater(r["duplication_percent"], 0)
+        self.assertGreater(r["duplication_lines_percent"], 0)
+        self.assertLess(r["score"], 100)
         locs = r["duplicates"][0]["locations"]
         self.assertEqual(locs, sorted(locs, key=lambda l: (l["file"], l["start_line"])))
         for loc in locs:

@@ -1,13 +1,11 @@
 """slopcheck: structural cleanliness score for a source directory.
 
-Score = round(100 - (0.4 * C + 0.25 * D + 0.15 * L + 0.2 * F)), measured by
-Lizard, where C is the percent of function lines (NLOC) inside functions with
-cyclomatic complexity above CCN_THRESHOLD, D is the percent of duplicated
-tokens, L is the percent of function lines inside functions longer than
-LONG_FUNCTION_NLOC lines, and F is the percent of file lines inside files
-longer than LARGE_FILE_NLOC lines. C and L overlap on purpose: long functions
-are usually complex, and both are penalized. Weights are provisional. This is
-not an AI-authorship detector and not proof of correctness.
+Score = 100 * clean_lines / total_lines over the analyzed files, measured by
+Lizard. A physical line is unclean when it is inside a function with cyclomatic
+complexity above CCN_THRESHOLD, a function longer than LONG_FUNCTION_NLOC
+lines, a file longer than LARGE_FILE_NLOC lines, or a duplicate block. Causes
+overlap; a line counts once. This is a structural cleanliness index, not an
+AI-authorship detector and not proof of correctness.
 """
 
 import argparse
@@ -26,10 +24,6 @@ from pathspec import GitIgnoreSpec
 
 CCN_THRESHOLD = 10
 LONG_FUNCTION_NLOC = 100
-WEIGHT_COMPLEXITY = 0.4
-WEIGHT_DUPLICATION = 0.25
-WEIGHT_LENGTH = 0.15
-WEIGHT_FILE_SIZE = 0.2
 MIN_DUPLICATE_TOKENS = 70
 TOP_N = 10
 TINY_FUNCTION_NLOC = 2
@@ -93,16 +87,17 @@ def select_files(root, excludes=()):
 
 
 def analyze(files):
-    """Returns (file_infos, duplicate_extension, failures)."""
+    """Returns (file_infos, duplicate_extension, failures, {path: physical line count})."""
     exts = lizard.get_extensions(["duplicate"])
     dup_ext = exts[-1]
     analyzer = lizard.FileAnalyzer(exts)
-    infos, failures = [], []
+    infos, failures, line_counts = [], [], {}
     for path in files:
         err = io.StringIO()
         try:
             with contextlib.redirect_stderr(err):
-                info = analyzer.analyze_source_code(path, lizard.auto_read(path))
+                code = lizard.auto_read(path)
+                info = analyzer.analyze_source_code(path, code)
         except Exception as exc:  # noqa: BLE001 - any parser failure excludes the file
             failures.append((path, f"{type(exc).__name__}: {exc}"))
             continue
@@ -110,14 +105,16 @@ def analyze(files):
             failures.append((path, err.getvalue().strip()))
             continue
         infos.append(info)
+        line_counts[path] = code.count("\n") + (1 if code and not code.endswith("\n") else 0)
     for ext in exts:
         if hasattr(ext, "cross_file_process"):
             infos = ext.cross_file_process(infos)
-    return list(infos), dup_ext, failures
+    return list(infos), dup_ext, failures, line_counts
 
 
-def _clamp(value):
-    return None if value is None else max(0.0, min(100.0, value))
+def _mark(marked, line_counts, path, start, end):
+    """Add physical lines start..end (clipped to the file) to marked[path]."""
+    marked.setdefault(path, set()).update(range(max(1, start), min(end, line_counts[path]) + 1))
 
 
 def single_implementation_interfaces(cs_files, rel):
@@ -240,28 +237,35 @@ def scan(root, excludes=()):
     root = os.path.abspath(root)
     rel = lambda p: os.path.relpath(p, root).replace(os.sep, "/")  # noqa: E731
     supported, unsupported = select_files(root, excludes)
-    infos, dup_ext, failures = analyze(supported)
+    infos, dup_ext, failures, line_counts = analyze(supported)
 
     functions = [fn for info in infos for fn in info.function_list]
-    total_nloc = sum(fn.nloc for fn in functions)
     total_ccn = sum(fn.cyclomatic_complexity for fn in functions)
     complex_fns = [fn for fn in functions if fn.cyclomatic_complexity > CCN_THRESHOLD]
     long_fns = [fn for fn in functions if fn.nloc > LONG_FUNCTION_NLOC]
-    share = lambda fns: _clamp(100.0 * sum(fn.nloc for fn in fns) / total_nloc) if total_nloc else None  # noqa: E731
-    complexity, length = share(complex_fns), share(long_fns)
-    complex_functions = _clamp(100.0 * len(complex_fns) / len(functions)) if functions else None
-
     large = sorted((info for info in infos if info.nloc > LARGE_FILE_NLOC), key=lambda i: (-i.nloc, rel(i.filename)))
-    file_nloc = sum(info.nloc for info in infos)
-    file_size = _clamp(100.0 * sum(i.nloc for i in large) / file_nloc) if file_nloc else (0.0 if infos else None)
-
     blocks = list(dup_ext.get_duplicates(min_duplicate_tokens=MIN_DUPLICATE_TOKENS))
-    duplication = _clamp(100.0 * dup_ext.duplicate_rate()) if infos else None
+
+    causes = {"complexity": {}, "length": {}, "file_size": {}, "duplication_lines": {}}
+    for fn in complex_fns:
+        _mark(causes["complexity"], line_counts, fn.filename, fn.start_line, fn.end_line)
+    for fn in long_fns:
+        _mark(causes["length"], line_counts, fn.filename, fn.start_line, fn.end_line)
+    for info in large:
+        _mark(causes["file_size"], line_counts, info.filename, 1, line_counts[info.filename])
+    for block in blocks:
+        for snippet in block:
+            _mark(causes["duplication_lines"], line_counts, snippet.file_name, snippet.start_line, snippet.end_line)
+    total_lines = sum(line_counts.values())
+    unclean = {path: set().union(*(c.get(path, ()) for c in causes.values())) for path in line_counts}
+    unclean_lines = sum(len(s) for s in unclean.values())
+    share = lambda marked: 100.0 * sum(len(s) for s in marked.values()) / total_lines if total_lines else None  # noqa: E731
+    complex_functions = 100.0 * len(complex_fns) / len(functions) if functions else None
+    duplication = 100.0 * dup_ext.duplicate_rate() if infos else None
 
     score = None
-    if None not in (complexity, duplication, length, file_size):
-        score = round(100 - (WEIGHT_COMPLEXITY * complexity + WEIGHT_DUPLICATION * duplication
-                             + WEIGHT_LENGTH * length + WEIGHT_FILE_SIZE * file_size))
+    if infos and functions and total_lines:
+        score = round(100.0 * (total_lines - unclean_lines) / total_lines)
 
     def ranked(metric, attr):
         rows = ({"file": rel(fn.filename), "line": fn.start_line, "name": fn.name, metric: getattr(fn, attr)}
@@ -288,12 +292,17 @@ def scan(root, excludes=()):
         "analyzer": {"name": "lizard", "version": version("lizard")},
         "path": root,
         "score": score,
-        "formula": "round(100 - (0.4 * C + 0.25 * D + 0.15 * L + 0.2 * F))",
-        "complexity_percent": pct(complexity),
-        "complex_functions_percent": pct(complex_functions),
+        "formula": "100 * clean_lines / total_lines; a line is unclean when it is in a function with CCN > 10, "
+                   "a function longer than 100 lines, a file longer than 750 lines, or a duplicate block",
+        "total_lines": total_lines,
+        "unclean_lines": unclean_lines,
+        "clean_lines_percent": pct(100.0 * (total_lines - unclean_lines) / total_lines) if total_lines else None,
+        "complexity_percent": pct(share(causes["complexity"])),
+        "length_percent": pct(share(causes["length"])),
+        "file_size_percent": pct(share(causes["file_size"])),
+        "duplication_lines_percent": pct(share(causes["duplication_lines"])),
         "duplication_percent": pct(duplication),
-        "length_percent": pct(length),
-        "file_size_percent": pct(file_size),
+        "complex_functions_percent": pct(complex_functions),
         "analyzed_files": len(infos),
         "analyzed_functions": len(functions),
         "total_ccn": total_ccn,
@@ -338,14 +347,17 @@ def render_text(result):
         reason = "no analyzed files" if result["analyzed_files"] == 0 else "no functions found"
         lines.append(f"Score: n/a ({reason})")
     else:
-        lines.append(f"Score: {result['score']}/100")
+        lines.append(f"Score: {result['score']}/100  (clean lines: {result['clean_lines_percent']:.2f}%"
+                     f" of {result['total_lines']})")
     pct = lambda v: "n/a" if v is None else f"{v:.2f}%"  # noqa: E731
     lines += [
-        f"Complexity (lines in functions with CCN > {CCN_THRESHOLD}): {pct(result['complexity_percent'])}"
+        "Unclean lines by cause (causes overlap):",
+        f"  Complex functions (CCN > {CCN_THRESHOLD}): {pct(result['complexity_percent'])}"
         f"   ({pct(result['complex_functions_percent'])} of functions)",
-        f"Duplication (tokens in blocks >= {MIN_DUPLICATE_TOKENS} tokens): {pct(result['duplication_percent'])}",
-        f"Length (lines in functions > {LONG_FUNCTION_NLOC} lines): {pct(result['length_percent'])}",
-        f"File size (lines in files > {LARGE_FILE_NLOC} lines): {pct(result['file_size_percent'])}",
+        f"  Long functions (> {LONG_FUNCTION_NLOC} lines): {pct(result['length_percent'])}",
+        f"  Large files (> {LARGE_FILE_NLOC} lines): {pct(result['file_size_percent'])}",
+        f"  Duplicate blocks: {pct(result['duplication_lines_percent'])}"
+        f"   (token rate {pct(result['duplication_percent'])})",
         f"Analyzed: {result['analyzed_files']} files, {result['analyzed_functions']} functions",
         f"Decision points: {result['decision_points']} (total CCN {result['total_ccn']})",
     ]

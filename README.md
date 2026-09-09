@@ -51,38 +51,35 @@ slopcheck PATH --fail-under 80
 ## Scoring
 
 ```
-score = round(100 - (0.4 * C + 0.25 * D + 0.15 * L + 0.2 * F))
+score = round(100 * clean_lines / total_lines)
 ```
 
-All four components are percentages of the same analyzed set. "Function
-lines" means NLOC (lines with code) inside functions, as counted by Lizard.
-"File lines" means NLOC of a whole file.
+`total_lines` is the number of physical lines in all analyzed files. A line is
+**unclean** when it is inside at least one of:
 
-- **C** (`complexity_percent`): percent of function lines that are inside
-  functions with cyclomatic complexity greater than 10.
-- **D** (`duplication_percent`): percent of tokens that are part of a duplicated
-  block, as reported by Lizard's `duplicate` extension. A block must be at least
-  70 tokens long to count.
-- **L** (`length_percent`): percent of function lines that are inside functions
-  longer than 100 lines.
-- **F** (`file_size_percent`): percent of file lines that are inside files
-  longer than 750 lines. Same threshold as the "prefer files under 750 lines"
-  guideline.
+1. a function with cyclomatic complexity greater than 10 (`CCN_THRESHOLD`);
+2. a function longer than 100 lines of code (`LONG_FUNCTION_NLOC`);
+3. a file longer than 750 lines of code (`LARGE_FILE_NLOC`), every line of it;
+4. a duplicate block reported by Lizard's `duplicate` extension, minimum 70
+   tokens (`MIN_DUPLICATE_TOKENS`), all blocks, not only the 10 shown.
 
-All values are clamped to 0..100. The weights (0.4, 0.25, 0.15, 0.2) are
-provisional. C and L overlap, because long functions are usually complex; that
-is intended, and both are penalized. The score is `null` when there are no
-analyzed files or no functions.
+Causes overlap. A line that is in a complex function inside a large file counts
+once. The four `*_percent` values report each cause on its own as a share of
+`total_lines`, so they can add up to more than `100 - score`.
 
-`complex_functions_percent` is a supplemental value: the percent of functions
-(by count, not by lines) with cyclomatic complexity greater than 10. It is not
-part of the score.
+The score is a structural cleanliness index. It is not a grade and not proof of
+quality or correctness. It is `null` when there are no analyzed files or no
+functions.
+
+`duplication_percent` (Lizard's token duplication rate) and
+`complex_functions_percent` (percent of functions with CCN > 10, by count) are
+reference values and are not part of the score.
 
 ### Gaming the score
 
-Splitting a big function into many small ones lowers C and L without removing
-any logic. It also raises `total_ccn` by 1 per new function, and raises the
-tiny-function and chain-candidate counts in `diagnostics`. Use
+Splitting a big function into many small ones removes lines from causes 1 and 2
+without removing any logic. It also raises `total_ccn` by 1 per new function,
+and raises the tiny-function and chain-candidate counts in `diagnostics`. Use
 `decision_points` (`total_ccn - analyzed_functions`, the number of branches and
 conditions) as the split-proof total: a refactor that does not remove behavior
 should not increase it. In review, compare `decision_points` between base and
@@ -96,11 +93,15 @@ head.
 | `path` | Absolute path that was scanned. |
 | `score` | Integer 0..100, or `null`. |
 | `formula` | The formula string. |
-| `complexity_percent` | C, rounded to 2 decimals, or `null`. |
-| `complex_functions_percent` | Percent of functions with CCN > 10 (by count), or `null`. |
-| `duplication_percent` | D, rounded to 2 decimals, or `null`. |
-| `length_percent` | L, rounded to 2 decimals, or `null`. |
-| `file_size_percent` | F, rounded to 2 decimals, or `null`. |
+| `total_lines` | Physical lines in all analyzed files. |
+| `unclean_lines` | Lines in the union of all causes. |
+| `clean_lines_percent` | `100 * (total_lines - unclean_lines) / total_lines`, 2 decimals. |
+| `complexity_percent` | Lines in functions with CCN > 10, as percent of `total_lines`. |
+| `length_percent` | Lines in functions longer than 100 lines, as percent of `total_lines`. |
+| `file_size_percent` | Lines in files longer than 750 lines, as percent of `total_lines`. |
+| `duplication_lines_percent` | Lines in duplicate blocks, as percent of `total_lines`. |
+| `duplication_percent` | Lizard token duplication rate. Reference only. |
+| `complex_functions_percent` | Percent of functions with CCN > 10 (by count). Reference only. |
 | `analyzed_files` | Number of files Lizard parsed. |
 | `analyzed_functions` | Number of functions found. |
 | `total_ccn` | Sum of cyclomatic complexity over all functions. |
