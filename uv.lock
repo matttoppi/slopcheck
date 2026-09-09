@@ -39,7 +39,11 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "lizard" },
+    { name = "pathspec" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "lizard", specifier = "==1.24.0" }]
+requires-dist = [
+    { name = "lizard", specifier = "==1.24.0" },
+    { name = "pathspec", specifier = ">=0.12" },
+]
