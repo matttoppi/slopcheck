@@ -1,0 +1,16 @@
+[project]
+name = "slopcheck"
+version = "0.1.0"
+description = "Structural cleanliness score for a source directory (cyclomatic complexity + token duplication, via Lizard)"
+requires-python = ">=3.10"
+dependencies = ["lizard==1.24.0"]
+
+[project.scripts]
+slopcheck = "slopcheck:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["slopcheck.py"]
