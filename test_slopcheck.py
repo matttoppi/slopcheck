@@ -92,8 +92,10 @@ class ScanTests(unittest.TestCase):
         self.assertAlmostEqual(r["complex_functions_percent"], 100 / 3, places=2)
         self.assertTrue(0 < r["complexity_percent"] < 100)
         self.assertEqual(r["length_percent"], 0.0)
-        c, d, l = r["complexity_percent"], r["duplication_percent"], r["length_percent"]
-        self.assertEqual(r["score"], round(100 - (0.5 * c + 0.3 * d + 0.2 * l)))
+        self.assertEqual(r["file_size_percent"], 0.0)
+        c, d, l, f = (r["complexity_percent"], r["duplication_percent"], r["length_percent"],
+                      r["file_size_percent"])
+        self.assertEqual(r["score"], round(100 - (0.4 * c + 0.25 * d + 0.15 * l + 0.2 * f)))
         self.assertEqual(r["top_complexity"][0]["name"], "Calc::Complex")
         self.assertEqual(r["top_complexity"][0]["ccn"], 13)
         self.assertEqual(r["total_ccn"], sum(f["ccn"] for f in r["top_complexity"]))
@@ -251,10 +253,10 @@ class ScanTests(unittest.TestCase):
     def test_large_files(self):
         write(self.root, "calc.cs", CS_SOURCE)
         write(self.root, "big.ts", "".join(f"export const v{i} = {i};\n" for i in range(800)))
-        lf = slopcheck.scan(self.root)["diagnostics"]["large_files"]
-        self.assertEqual(lf["count"], 1)
-        self.assertEqual(lf["examples"][0]["file"], "big.ts")
-        self.assertGreater(lf["percent_of_lines"], 50)
+        r = slopcheck.scan(self.root)
+        self.assertEqual(len(r["largest_files"]), 1)
+        self.assertEqual(r["largest_files"][0]["file"], "big.ts")
+        self.assertGreater(r["file_size_percent"], 50)
 
     def test_single_impl_interfaces(self):
         write(self.root, "ifaces.cs", "interface IOne {}\ninterface ITwo {}\ninterface IThree<T> {}\n"

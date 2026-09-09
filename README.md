@@ -51,11 +51,12 @@ slopcheck PATH --fail-under 80
 ## Scoring
 
 ```
-score = round(100 - (0.5 * C + 0.3 * D + 0.2 * L))
+score = round(100 - (0.4 * C + 0.25 * D + 0.15 * L + 0.2 * F))
 ```
 
-All three components are percentages of the same analyzed set. "Function
+All four components are percentages of the same analyzed set. "Function
 lines" means NLOC (lines with code) inside functions, as counted by Lizard.
+"File lines" means NLOC of a whole file.
 
 - **C** (`complexity_percent`): percent of function lines that are inside
   functions with cyclomatic complexity greater than 10.
@@ -64,11 +65,14 @@ lines" means NLOC (lines with code) inside functions, as counted by Lizard.
   70 tokens long to count.
 - **L** (`length_percent`): percent of function lines that are inside functions
   longer than 100 lines.
+- **F** (`file_size_percent`): percent of file lines that are inside files
+  longer than 750 lines. Same threshold as the "prefer files under 750 lines"
+  guideline.
 
-All values are clamped to 0..100. The weights (0.5, 0.3, 0.2) are provisional.
-C and L overlap, because long functions are usually complex; that is intended,
-and both are penalized. The score is `null` when there are no analyzed files
-or no functions.
+All values are clamped to 0..100. The weights (0.4, 0.25, 0.15, 0.2) are
+provisional. C and L overlap, because long functions are usually complex; that
+is intended, and both are penalized. The score is `null` when there are no
+analyzed files or no functions.
 
 `complex_functions_percent` is a supplemental value: the percent of functions
 (by count, not by lines) with cyclomatic complexity greater than 10. It is not
@@ -96,12 +100,14 @@ head.
 | `complex_functions_percent` | Percent of functions with CCN > 10 (by count), or `null`. |
 | `duplication_percent` | D, rounded to 2 decimals, or `null`. |
 | `length_percent` | L, rounded to 2 decimals, or `null`. |
+| `file_size_percent` | F, rounded to 2 decimals, or `null`. |
 | `analyzed_files` | Number of files Lizard parsed. |
 | `analyzed_functions` | Number of functions found. |
 | `total_ccn` | Sum of cyclomatic complexity over all functions. |
 | `decision_points` | `total_ccn - analyzed_functions`: number of branches and conditions. Does not change when a function is split. |
 | `top_complexity` | Up to 10 functions: `file`, `line`, `name`, `ccn`. |
 | `long_functions` | Up to 10 functions: `file`, `line`, `name`, `nloc`. |
+| `largest_files` | Up to 10 files with more than 750 lines: `file`, `nloc`. |
 | `duplicates` | Up to 10 duplicate blocks: `lines` and `locations` (`file`, `start_line`, `end_line`). |
 | `skipped_unsupported` | Count of files without a Lizard reader, by extension. |
 | `diagnostics` | Supplemental metrics, not part of the score. See "Diagnostics". |
@@ -118,7 +124,6 @@ they measure patterns that often come with it.
 | Field | Description |
 |-------|-------------|
 | `tiny_functions_percent` | Percent of functions with 2 or fewer lines of code. Approximates pass-through and plumbing functions. `null` when there are no functions. |
-| `large_files` | `{"count", "percent_of_lines", "examples"}`: analyzed files with more than 750 lines of code (NLOC), and the share of all analyzed lines they hold. Same threshold as the "prefer files under 750 lines" guideline. `null` when there are no analyzed files. |
 | `single_implementation_interfaces` | C# only. `{"total", "single", "percent", "examples"}`: interfaces (`I` + capital letter) that exactly one `class`, `record`, or `struct` implements. Interfaces with no implementer are not counted as single. Regex heuristic over the analyzed `.cs` files. `null` when there are no C# files. |
 | `single_caller_chains` | `{"total_named", "chains", "percent", "examples"}`: named functions that have exactly one call site, where the calling function also has exactly one call site. One helper with one caller is normal decomposition and is not flagged; a chain of one-caller functions is. Functions with zero references are excluded on purpose (entry points, exports, tests). Names shorter than 4 characters and overloaded names (one name, several functions) are skipped. References are whole-word token matches, not resolved symbols. A match in a comment, a string, or an unrelated property name counts as a reference. Extra matches hide chains; a single false match can report a chain with the wrong caller. Treat every entry as a candidate to review, not a finding. `null` when there are no named functions. |
 | `change_coupling` | `{"pairs": [...]}`: up to 10 file pairs that change together. `shared` is the number of commits that touch both files; `ratio` is `shared / max(commits of a, commits of b)`. Only pairs with `shared >= 5` and `ratio >= 0.8` are listed. |

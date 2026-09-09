@@ -1,12 +1,13 @@
 """slopcheck: structural cleanliness score for a source directory.
 
-Score = round(100 - (0.5 * C + 0.3 * D + 0.2 * L)), measured by Lizard, where
-C is the percent of function lines (NLOC) inside functions with cyclomatic
-complexity above CCN_THRESHOLD, D is the percent of duplicated tokens, and L
-is the percent of function lines inside functions longer than
-LONG_FUNCTION_NLOC lines. C and L overlap on purpose: long functions are
-usually complex, and both are penalized. Weights are provisional. This is not
-an AI-authorship detector and not proof of correctness.
+Score = round(100 - (0.4 * C + 0.25 * D + 0.15 * L + 0.2 * F)), measured by
+Lizard, where C is the percent of function lines (NLOC) inside functions with
+cyclomatic complexity above CCN_THRESHOLD, D is the percent of duplicated
+tokens, L is the percent of function lines inside functions longer than
+LONG_FUNCTION_NLOC lines, and F is the percent of file lines inside files
+longer than LARGE_FILE_NLOC lines. C and L overlap on purpose: long functions
+are usually complex, and both are penalized. Weights are provisional. This is
+not an AI-authorship detector and not proof of correctness.
 """
 
 import argparse
@@ -25,9 +26,10 @@ from pathspec import GitIgnoreSpec
 
 CCN_THRESHOLD = 10
 LONG_FUNCTION_NLOC = 100
-WEIGHT_COMPLEXITY = 0.5
-WEIGHT_DUPLICATION = 0.3
-WEIGHT_LENGTH = 0.2
+WEIGHT_COMPLEXITY = 0.4
+WEIGHT_DUPLICATION = 0.25
+WEIGHT_LENGTH = 0.15
+WEIGHT_FILE_SIZE = 0.2
 MIN_DUPLICATE_TOKENS = 70
 TOP_N = 10
 TINY_FUNCTION_NLOC = 2
@@ -206,18 +208,6 @@ def single_caller_chains(infos, functions, rel):
     }
 
 
-def large_files(infos, rel):
-    if not infos:
-        return None
-    total = sum(info.nloc for info in infos)
-    large = sorted((info for info in infos if info.nloc > LARGE_FILE_NLOC), key=lambda i: (-i.nloc, rel(i.filename)))
-    return {
-        "count": len(large),
-        "percent_of_lines": round(100.0 * sum(i.nloc for i in large) / total, 2) if total else None,
-        "examples": [{"file": rel(i.filename), "nloc": i.nloc} for i in large[:TOP_N]],
-    }
-
-
 def diagnostics(root, rel, infos, functions):
     tiny = [fn for fn in functions if fn.nloc <= TINY_FUNCTION_NLOC]
     cs_files = [info.filename for info in infos if info.filename.lower().endswith(".cs")]
@@ -238,7 +228,6 @@ def diagnostics(root, rel, infos, functions):
         )[:TOP_N]
     return {
         "tiny_functions_percent": round(100.0 * len(tiny) / len(functions), 2) if functions else None,
-        "large_files": large_files(infos, rel),
         "single_implementation_interfaces": single_implementation_interfaces(cs_files, rel),
         "single_caller_chains": single_caller_chains(infos, functions, rel),
         "change_coupling": coupling,
@@ -262,13 +251,17 @@ def scan(root, excludes=()):
     complexity, length = share(complex_fns), share(long_fns)
     complex_functions = _clamp(100.0 * len(complex_fns) / len(functions)) if functions else None
 
+    large = sorted((info for info in infos if info.nloc > LARGE_FILE_NLOC), key=lambda i: (-i.nloc, rel(i.filename)))
+    file_nloc = sum(info.nloc for info in infos)
+    file_size = _clamp(100.0 * sum(i.nloc for i in large) / file_nloc) if file_nloc else (0.0 if infos else None)
+
     blocks = list(dup_ext.get_duplicates(min_duplicate_tokens=MIN_DUPLICATE_TOKENS))
     duplication = _clamp(100.0 * dup_ext.duplicate_rate()) if infos else None
 
     score = None
-    if None not in (complexity, duplication, length):
+    if None not in (complexity, duplication, length, file_size):
         score = round(100 - (WEIGHT_COMPLEXITY * complexity + WEIGHT_DUPLICATION * duplication
-                             + WEIGHT_LENGTH * length))
+                             + WEIGHT_LENGTH * length + WEIGHT_FILE_SIZE * file_size))
 
     def ranked(metric, attr):
         rows = ({"file": rel(fn.filename), "line": fn.start_line, "name": fn.name, metric: getattr(fn, attr)}
@@ -295,17 +288,19 @@ def scan(root, excludes=()):
         "analyzer": {"name": "lizard", "version": version("lizard")},
         "path": root,
         "score": score,
-        "formula": "round(100 - (0.5 * C + 0.3 * D + 0.2 * L))",
+        "formula": "round(100 - (0.4 * C + 0.25 * D + 0.15 * L + 0.2 * F))",
         "complexity_percent": pct(complexity),
         "complex_functions_percent": pct(complex_functions),
         "duplication_percent": pct(duplication),
         "length_percent": pct(length),
+        "file_size_percent": pct(file_size),
         "analyzed_files": len(infos),
         "analyzed_functions": len(functions),
         "total_ccn": total_ccn,
         "decision_points": total_ccn - len(functions),
         "top_complexity": ranked("ccn", "cyclomatic_complexity"),
         "long_functions": ranked("nloc", "nloc"),
+        "largest_files": [{"file": rel(i.filename), "nloc": i.nloc} for i in large[:TOP_N]],
         "duplicates": duplicates[:TOP_N],
         "skipped_unsupported": dict(sorted(skipped.items())),
         "diagnostics": diagnostics(root, rel, infos, functions),
@@ -350,6 +345,7 @@ def render_text(result):
         f"   ({pct(result['complex_functions_percent'])} of functions)",
         f"Duplication (tokens in blocks >= {MIN_DUPLICATE_TOKENS} tokens): {pct(result['duplication_percent'])}",
         f"Length (lines in functions > {LONG_FUNCTION_NLOC} lines): {pct(result['length_percent'])}",
+        f"File size (lines in files > {LARGE_FILE_NLOC} lines): {pct(result['file_size_percent'])}",
         f"Analyzed: {result['analyzed_files']} files, {result['analyzed_functions']} functions",
         f"Decision points: {result['decision_points']} (total CCN {result['total_ccn']})",
     ]
@@ -359,6 +355,9 @@ def render_text(result):
     if result["long_functions"]:
         lines += ["", "Longest functions:"]
         lines += [f"  {f['nloc']:>4}  {f['file']}:{f['line']}  {f['name']}" for f in result["long_functions"]]
+    if result["largest_files"]:
+        lines += ["", "Largest files:"]
+        lines += [f"  {e['nloc']:>5}  {e['file']}" for e in result["largest_files"]]
     if result["duplicates"]:
         lines += ["", "Duplicate blocks:"]
         for d in result["duplicates"]:
@@ -367,11 +366,6 @@ def render_text(result):
     diag = result["diagnostics"]
     lines += ["", "Diagnostics (not in score):",
               f"  Tiny functions (<= {TINY_FUNCTION_NLOC} lines): {pct(diag['tiny_functions_percent'])}"]
-    lf = diag["large_files"]
-    if lf is not None:
-        lines.append(f"  Large files (> {LARGE_FILE_NLOC} lines): {lf['count']} files holding"
-                     f" {pct(lf['percent_of_lines'])} of lines")
-        lines += [f"    {e['nloc']:>5}  {e['file']}" for e in lf["examples"]]
     scc = diag["single_caller_chains"]
     if scc is None:
         lines.append("  Single-caller chain candidates: n/a (no named functions)")
