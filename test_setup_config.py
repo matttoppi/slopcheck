@@ -95,7 +95,8 @@ class SetupTests(unittest.TestCase):
     def test_preserves_hook_and_config_and_runs_ratchet_first(self):
         hook = Path(self.root, ".githooks", "pre-commit")
         original = b"#!/bin/sh\n# existing check\nexit 37\n"
-        write(self.root, ".githooks/pre-commit", original.decode())
+        hook.parent.mkdir(parents=True)
+        hook.write_bytes(original)
         write(self.root, "slopcheck.json", '{"max_file_lines": 500}\n')
         config = Path(self.root, "slopcheck.json").read_bytes()
         self.initialize()
@@ -110,10 +111,12 @@ class SetupTests(unittest.TestCase):
         self.assertIsNotNone(executable)
         env = dict(os.environ, PATH=os.path.dirname(executable) + os.pathsep + os.environ["PATH"])
         command = ["git", "-C", self.root, "hook", "run", "pre-commit"]
-        self.assertEqual(subprocess.run(command, env=env, capture_output=True).returncode, 37)
+        passing = subprocess.run(command, env=env, capture_output=True)
+        self.assertEqual(passing.returncode, 37, passing.stderr.decode(errors="replace"))
         write(self.root, "calc.cs", CS_SOURCE.lstrip("\n"))
         self.git("add", "calc.cs")
-        self.assertEqual(subprocess.run(command, env=env, capture_output=True).returncode, 1)
+        failing = subprocess.run(command, env=env, capture_output=True)
+        self.assertEqual(failing.returncode, 1, failing.stderr.decode(errors="replace"))
 
     def test_defaults_and_husky(self):
         self.git("config", "core.hooksPath", ".husky/_")
