@@ -355,7 +355,32 @@ run `uv lock` and the checks above. Inspect the npm archive contents before
 publication. The archive includes the scanner and lockfile; it does not include
 the scanned repository or a virtual environment.
 
-Log into the npm account that owns the `@toppi` scope and run:
+### Trusted publishing from GitHub
+
+The `publish.yml` workflow publishes stable GitHub releases after its tests pass.
+It uses OpenID Connect (OIDC), so no npm access token is stored in GitHub.
+Configure the package's trusted publisher on npm with these values:
+
+| Field | Value |
+|-------|-------|
+| Publisher | GitHub Actions |
+| Label | slopcheck releases |
+| Organization or user | `matttoppi` |
+| Repository | `slopcheck` |
+| Workflow filename | `publish.yml` |
+| Environment name | Leave blank |
+| Allowed actions | Allow direct publishing with `npm publish` |
+
+Keep "Require two-factor authentication and disallow bypass 2fa tokens" enabled.
+That setting is compatible with trusted publishing.
+
+For each release, commit and push the matching package versions and lockfile.
+Then publish a GitHub release with a tag such as `v0.1.1` at that commit.
+The workflow rejects mismatched versions and ignores prereleases.
+The release commit must contain `.github/workflows/publish.yml`.
+See the [npm trusted publishing guide](https://docs.npmjs.com/trusted-publishers/).
+
+For a manual release, log into the npm account that owns the `@toppi` scope:
 
 ```sh
 npm login

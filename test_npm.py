@@ -15,7 +15,9 @@ class NpmTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="slopcheck npm ") as directory:
             packed = subprocess.run([shutil.which("npm"), "pack", "--json", "--pack-destination", directory],
                                     cwd=HERE, check=True, capture_output=True, text=True)
-            archive = json.loads(packed.stdout)[0]
+            archives = json.loads(packed.stdout)
+            # npm 12 keys results by package name; earlier versions return an array.
+            archive = archives["@toppi/slopcheck"] if isinstance(archives, dict) else archives[0]
             self.assertEqual({f["path"] for f in archive["files"]},
                              {"package.json", "README.md", "LICENSE", "cli/slopcheck.cjs",
                               "pyproject.toml", "uv.lock", "slopcheck.py"})

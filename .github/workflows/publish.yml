@@ -1,0 +1,40 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.event.release.prerelease == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          python-version: '3.10'
+      - name: Install npm with trusted publishing support
+        run: npm install --global npm@12.0.2
+      - name: Check release version
+        run: |
+          uv run --locked python - <<'PY'
+          import json
+          import os
+          from importlib.metadata import version
+          from pathlib import Path
+          npm_version = json.loads(Path('package.json').read_text())['version']
+          if version('slopcheck') != npm_version or os.environ['GITHUB_REF_NAME'] != f'v{npm_version}':
+              raise SystemExit('The release tag, package.json, and pyproject.toml versions must match.')
+          PY
+      - run: npm test
+      - run: npm publish --provenance --access public
