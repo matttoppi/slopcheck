@@ -16,6 +16,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from collections import Counter
 from importlib.metadata import version
 
@@ -409,6 +410,74 @@ def render_text(result):
     return "\n".join(lines) + "\n"
 
 
+def _git(root, *args, data=None):
+    result = subprocess.run(["git", "-C", root, *args], input=data, capture_output=True)
+    if result.returncode:
+        raise ValueError(result.stderr.decode("utf-8", errors="replace").strip())
+    return result.stdout
+
+
+def _snapshot(root, revision, destination, staged=False):
+    """Read raw Git blobs; never checkout files, run filters, or change the index."""
+    if staged:
+        listing = _git(root, "ls-files", "--stage", "--full-name", "-z")
+    else:
+        tree = _git(root, "rev-parse", "--verify", "--end-of-options", revision + "^{tree}").strip().decode("ascii")
+        listing = _git(root, "ls-tree", "-r", "-z", tree)
+    entries = []
+    for entry in listing.split(b"\0"):
+        if not entry:
+            continue
+        metadata, name = entry.split(b"\t", 1)
+        mode, middle, last = metadata.split()
+        if staged and last != b"0":
+            raise ValueError("resolve index conflicts before running the ratchet")
+        if mode not in (b"100644", b"100755"):
+            continue  # Match the scanner: skip symlinks and unpopulated submodules.
+        name = os.fsdecode(name)
+        if os.path.basename(name) != ".gitignore" and lizard.get_reader_for(name) is None:
+            continue
+        path = os.path.abspath(os.path.join(destination, name))
+        if os.path.commonpath([destination, path]) != destination:
+            raise ValueError(f"unsafe Git path: {name}")
+        entries.append((middle if staged else last, path))
+    # ponytail: buffer source blobs; stream cat-file if source size makes memory use a problem.
+    blobs = io.BytesIO(_git(root, "cat-file", "--batch", data=b"".join(oid + b"\n" for oid, _ in entries)))
+    for oid, path in entries:
+        header = blobs.readline().split()
+        if len(header) != 3 or header[:2] != [oid, b"blob"]:
+            raise ValueError(f"could not read Git blob: {oid.decode('ascii')}")
+        content = blobs.read(int(header[2]))
+        if blobs.read(1) != b"\n":
+            raise ValueError("incomplete Git blob output")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(content)
+
+
+def ratchet(root, base, staged=False, excludes=()):
+    """Compare exact clean-line shares under one analyzer version; HEAD is the moving baseline."""
+    if _git(root, "rev-parse", "--show-prefix").strip():
+        raise ValueError("--ratchet requires PATH to be the Git worktree root")
+    summaries = []
+    for revision, use_index in ((base, False), ("HEAD", staged)):
+        label = "index" if use_index else revision
+        with tempfile.TemporaryDirectory(prefix="slopcheck-") as directory:
+            _snapshot(root, revision, directory, use_index)
+            result = scan(directory, excludes)
+        if result["failures"]:
+            names = ", ".join(f["file"] for f in result["failures"])
+            raise ValueError(f"{label}: parser failures prevent comparison: {names}")
+        if result["score"] is None:
+            raise ValueError(f"{label}: no score; cannot compare an empty or unsupported snapshot")
+        total, unclean = result["total_lines"], result["unclean_lines"]
+        summaries.append({"revision": label, "score": result["score"], "total_lines": total,
+                          "unclean_lines": unclean, "clean_lines_percent": 100 * (total - unclean) / total})
+    before, after = summaries
+    return {"base": before, "candidate": after,
+            "passed": after["unclean_lines"] * before["total_lines"] <= before["unclean_lines"] * after["total_lines"]}
+
+
 def run(argv=None):
     parser = argparse.ArgumentParser(prog="slopcheck", description=__doc__.split("\n\n")[1])
     parser.add_argument("path", help="directory to scan (read-only)")
@@ -416,10 +485,28 @@ def run(argv=None):
     parser.add_argument("--exclude", action="append", default=[], metavar="PATTERN",
                         help="extra gitignore-style pattern relative to PATH (repeatable)")
     parser.add_argument("--fail-under", type=int, metavar="N", help="exit 1 when the score is below N")
+    parser.add_argument("--ratchet", metavar="BASE", help="compare HEAD with a Git revision; reject score decreases")
+    parser.add_argument("--staged", action="store_true", help="compare the Git index instead of HEAD (requires --ratchet)")
     args = parser.parse_args(argv)
+    if args.staged and not args.ratchet:
+        parser.error("--staged requires --ratchet")
     if not os.path.isdir(args.path):
         print(f"slopcheck: not a directory: {args.path}", file=sys.stderr)
         return 2
+    if args.ratchet:
+        try:
+            result = ratchet(args.path, args.ratchet, args.staged, args.exclude)
+        except (OSError, ValueError) as exc:
+            print(f"slopcheck: {exc}", file=sys.stderr)
+            return 2
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print(f"slopcheck ratchet: {result['base']['clean_lines_percent']:.6f}% -> "
+                  f"{result['candidate']['clean_lines_percent']:.6f}% "
+                  f"({'PASS' if result['passed'] else 'FAIL'})")
+        return int(not result["passed"] or (
+            args.fail_under is not None and result["candidate"]["score"] < args.fail_under))
     result = scan(args.path, args.exclude)
     if args.json:
         print(json.dumps(result, indent=2))

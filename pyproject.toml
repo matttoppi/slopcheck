@@ -2,8 +2,13 @@
 name = "slopcheck"
 version = "0.1.0"
 description = "Structural cleanliness score for a source directory (cyclomatic complexity + token duplication, via Lizard)"
+readme = "README.md"
+license = "MIT"
 requires-python = ">=3.10"
 dependencies = ["lizard==1.24.0", "pathspec>=0.12"]
+
+[project.urls]
+Repository = "https://github.com/matttoppi/slopcheck"
 
 [project.scripts]
 slopcheck = "slopcheck:main"

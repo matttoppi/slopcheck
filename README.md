@@ -1,9 +1,8 @@
 # slopcheck
 
 `slopcheck` gives a source directory a structural cleanliness score from 0 to 100.
-It measures two things with [Lizard](https://github.com/terryyin/lizard):
-how many functions have high cyclomatic complexity, and how many tokens are
-duplicated.
+It measures function complexity, function length, file size, and duplication
+with [Lizard](https://github.com/terryyin/lizard).
 
 It is **not** an AI-authorship detector and it is **not** proof that the code is
 correct. It only reports structure.
@@ -12,7 +11,29 @@ correct. It only reports structure.
 
 ## Setup
 
-Install as a tool:
+### npm
+
+Requires Node.js 18+ and [uv](https://docs.astral.sh/uv/getting-started/installation/).
+The npm package launches the Python scanner. `uv` manages Python 3.10+ and
+installs the dependencies from the included lockfile on the first run.
+Later runs reuse that environment. There is no npm install script.
+
+After the first npm release:
+
+```sh
+npm install --save-dev --save-exact @matttoppi/slopcheck@0.1.0
+npx --no-install slopcheck .
+```
+
+For a one-off scan after publication:
+
+```sh
+npx --yes @matttoppi/slopcheck@0.1.0 . --json
+```
+
+### Python
+
+Install from a local checkout:
 
 ```
 uv tool install /path/to/slopcheck
@@ -39,14 +60,87 @@ slopcheck PATH --fail-under 80
 - `--json` prints the full result as JSON.
 - `--exclude PATTERN` adds a gitignore-style pattern, relative to `PATH`. Repeat the flag for more patterns.
 - `--fail-under N` exits with code 1 when the score is below `N`. Useful in CI.
+- `--ratchet BASE` compares the committed `HEAD` snapshot with a Git revision.
+- `--staged` uses staged files as the candidate. Requires `--ratchet`.
+
+### Prevent score decreases
+
+Run from the Git worktree root:
+
+```sh
+slopcheck . --ratchet HEAD --staged
+```
+
+This compares the index with `HEAD`. Unstaged and untracked files do not affect
+the result. Equal or higher clean-line shares pass. A lower share fails, even
+when both rounded scores are equal. The next commit becomes the baseline;
+there is no score file to update or stage. The check does not improve code itself.
+
+Both snapshots use the same scanner and command-line exclusions. Each snapshot
+uses its own `.gitignore` files. Review changes to exclusions along with code.
+The check reads raw Git blobs into temporary directories. It does not change
+the index, working files, or branches. Git checkout filters and archive
+attributes do not affect the snapshots. Symlinks and submodules are skipped.
+
+The check fails if either snapshot has no score or a parser failure. An invalid
+revision or an unresolved index conflict also fails. Create the first commit
+before enabling the check, since an initial repository has no `HEAD` baseline.
+
+Ratchet JSON contains `base`, `candidate`, and `passed`. Each snapshot summary
+has `revision`, `score`, `total_lines`, `unclean_lines`, and `clean_lines_percent`.
+Comparison uses integer line counts without rounding.
+
+### Pre-commit hook
+
+After installing the npm package, add this line to an existing Husky
+`.husky/pre-commit` hook:
+
+```sh
+npx --no-install slopcheck . --ratchet HEAD --staged
+```
+
+The same command works in a native Git pre-commit hook. Preserve existing checks
+and stop on each failure. Install the pinned package before committing; the
+hook must fail if the tool is missing. No Husky dependency is required.
+
+### Continuous integration
+
+For a GitHub pull request, check the proposed merge against the target commit.
+After publishing the package, add a required job like this to your workflow:
+
+```yaml
+slopcheck:
+  runs-on: ubuntu-latest
+  permissions:
+    contents: read
+  steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      with:
+        fetch-depth: 0
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version: '22'
+    - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+      with:
+        python-version: '3.10'
+    - name: Reject a lower score
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      run: npx --yes @matttoppi/slopcheck@0.1.0 . --ratchet "$BASE_SHA"
+```
+
+Use this job on the `pull_request` event. Keep the full history so the base
+commit is available. Local hooks can be bypassed with `--no-verify`; require
+the job in branch protection to enforce the check before merging. Pin the same
+package version locally and in continuous integration.
 
 ### Exit codes
 
 | Code | Meaning |
 |------|---------|
-| 0 | A score was reported (and is not below `--fail-under`). |
-| 1 | No score (no analyzed files or no functions found), or score below `--fail-under`. |
-| 2 | `PATH` is not a directory. |
+| 0 | A score was reported, or the ratchet passed. The score also meets `--fail-under` if set. |
+| 1 | No scan score, score below `--fail-under`, or a score decrease in ratchet mode. |
+| 2 | Invalid arguments or path, missing runtime, or a ratchet comparison that cannot run. |
 
 ## Scoring
 
@@ -167,3 +261,34 @@ touch more than 50 analyzed files are skipped as bulk edits.
 - Files that cannot be decoded, or that make Lizard fail (for example with
   `RecursionError`), are listed in `failures` and excluded from all measurements.
 - There is no unused-code detection.
+
+## Development and release
+
+```sh
+npm test
+uv build
+npm pack --dry-run
+```
+
+Tests cover the scanner, staged comparisons, baseline updates, and installation
+of the npm archive. The test workflow runs on Linux, macOS, and Windows.
+
+For a release, set the same version in `package.json` and `pyproject.toml`, then
+run `uv lock` and the checks above. Inspect the npm archive contents before
+publication. The archive includes the scanner and lockfile; it does not include
+the scanned repository or a virtual environment.
+
+After the public GitHub repository is ready, log into the npm account that owns
+the `@matttoppi` scope and run:
+
+```sh
+npm login
+npm publish --access public
+```
+
+No PyPI release is needed for the npm launcher. See the
+[npm publication guide](https://docs.npmjs.com/creating-and-publishing-scoped-public-packages/).
+
+## License
+
+[MIT](LICENSE).

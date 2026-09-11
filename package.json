@@ -1,0 +1,28 @@
+{
+  "name": "@matttoppi/slopcheck",
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Structural cleanliness scores and a Git score ratchet, powered by Lizard",
+  "bin": {
+    "slopcheck": "cli/slopcheck.cjs"
+  },
+  "files": [
+    "cli/slopcheck.cjs",
+    "slopcheck.py",
+    "pyproject.toml",
+    "uv.lock"
+  ],
+  "scripts": {
+    "test": "uv run --locked python -m unittest -q"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/matttoppi/slopcheck.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
