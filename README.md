@@ -7,7 +7,8 @@ with [Lizard](https://github.com/terryyin/lizard).
 It is **not** an AI-authorship detector and it is **not** proof that the code is
 correct. It only reports structure.
 
-`slopcheck` never modifies or executes the scanned directory. It only reads files.
+Scans and ratchet checks only read files. `slopcheck init` writes a config file
+and installs a Git hook. The scanner never executes the source it analyzes.
 
 ## Setup
 
@@ -24,6 +25,14 @@ After the first npm release:
 npm install --save-dev --save-exact @matttoppi/slopcheck@0.1.0
 npx --no-install slopcheck .
 ```
+
+Before npm publication, install from the public GitHub repository:
+
+```sh
+npm install --save-dev github:matttoppi/slopcheck#main
+```
+
+Commit the npm lockfile to retain the resolved Git commit.
 
 For a one-off scan after publication:
 
@@ -46,6 +55,67 @@ Or run it without installation:
 ```
 uv run --project /path/to/slopcheck slopcheck PATH
 ```
+
+### Connect a repository
+
+Install the tool as a local npm dependency or a persistent Python tool first.
+Then run this from the repository:
+
+```sh
+npx --no-install slopcheck init
+# With a Python tool installation:
+slopcheck init
+```
+
+`init` creates `slopcheck.json` with the default limits and installs the
+pre-commit ratchet. You can also pass a repository path: `slopcheck init PATH`.
+Existing settings are preserved. Running `init` again does not duplicate the check.
+
+The hook uses a local `node_modules/.bin/slopcheck` when present, or `slopcheck`
+from `PATH`. Keep that installation and `uv` available when committing.
+An npm one-off execution does not replace a persistent installation for hooks.
+
+Existing shell hooks keep their contents. The ratchet runs before them, including
+before an existing `exec` or `exit`. With Husky's `.husky/_` setup, `init` edits
+`.husky/pre-commit` and leaves the generated wrapper alone. It does not change
+`core.hooksPath`. It refuses non-shell hooks, symlink hooks, and custom hook
+directories outside the repository; add the command manually in those cases.
+
+Commit `slopcheck.json` and any changed tracked hook. `init` does not stage files.
+Each clone must run `init` because Git's default hooks are local files. Worktrees
+share the default Git hooks directory. Create the first commit before enabling
+the hook, since the ratchet needs an existing `HEAD`.
+
+### Configure scoring
+
+Edit `slopcheck.json` in the directory you scan. Missing settings use these defaults:
+
+```json
+{
+  "max_complexity": 10,
+  "max_function_lines": 100,
+  "max_file_lines": 750,
+  "min_duplicate_tokens": 70,
+  "exclude": []
+}
+```
+
+| Setting | Effect |
+|---------|--------|
+| `max_complexity` | A function above this cyclomatic complexity marks its lines unclean. |
+| `max_function_lines` | A function above this number of code lines marks its lines unclean. |
+| `max_file_lines` | A file above this number of code lines marks the entire file unclean. |
+| `min_duplicate_tokens` | Minimum duplicate-token threshold passed to Lizard. Higher values ignore smaller duplicates. |
+| `exclude` | Additional gitignore-style patterns, such as `["fixtures/"]`. Command-line `--exclude` patterns are added to these. |
+
+Limits must be positive integers. `min_duplicate_tokens` must be at least 31,
+which is Lizard's token sample size. Unknown settings and malformed config files
+fail with exit code 2. Configuration files must be regular files, not symlinks.
+
+Scans read only `PATH/slopcheck.json`; they do not search parent directories.
+Run against the repository root to use its config. The JSON result includes the
+effective `config`, and text reports show the active limits. Supplemental
+diagnostic thresholds do not affect scoring and remain fixed.
 
 ## Usage
 
@@ -76,8 +146,12 @@ the result. Equal or higher clean-line shares pass. A lower share fails, even
 when both rounded scores are equal. The next commit becomes the baseline;
 there is no score file to update or stage. The check does not improve code itself.
 
-Both snapshots use the same scanner and command-line exclusions. Each snapshot
-uses its own `.gitignore` files. Review changes to exclusions along with code.
+Both snapshots use the same scanner and the candidate's `slopcheck.json`.
+With `--staged`, the config comes from the index. Otherwise it comes from `HEAD`.
+Unstaged config changes cannot affect the check. A config change recalculates
+both scores under the new limits; it does not compare scores from different rules.
+Each snapshot uses its own `.gitignore` files. Review config and exclusion changes
+along with code, since they can change what the score measures.
 The check reads raw Git blobs into temporary directories. It does not change
 the index, working files, or branches. Git checkout filters and archive
 attributes do not affect the snapshots. Symlinks and submodules are skipped.
@@ -86,13 +160,14 @@ The check fails if either snapshot has no score or a parser failure. An invalid
 revision or an unresolved index conflict also fails. Create the first commit
 before enabling the check, since an initial repository has no `HEAD` baseline.
 
-Ratchet JSON contains `base`, `candidate`, and `passed`. Each snapshot summary
+Ratchet JSON contains `base`, `candidate`, `config`, and `passed`. Each snapshot summary
 has `revision`, `score`, `total_lines`, `unclean_lines`, and `clean_lines_percent`.
 Comparison uses integer line counts without rounding.
 
-### Pre-commit hook
+### Manual pre-commit hook
 
-After installing the npm package, add this line to an existing Husky
+Use `slopcheck init` for automatic setup. For manual setup after installing the
+npm package, add this line to an existing Husky
 `.husky/pre-commit` hook:
 
 ```sh
@@ -151,11 +226,11 @@ score = round(100 * clean_lines / total_lines)
 `total_lines` is the number of physical lines in all analyzed files. A line is
 **unclean** when it is inside at least one of:
 
-1. a function with cyclomatic complexity greater than 10 (`CCN_THRESHOLD`);
-2. a function longer than 100 lines of code (`LONG_FUNCTION_NLOC`);
-3. a file longer than 750 lines of code (`LARGE_FILE_NLOC`), every line of it;
+1. a function above `max_complexity` (default 10);
+2. a function above `max_function_lines` code lines (default 100);
+3. a file above `max_file_lines` code lines (default 750), every line of it;
 4. a duplicate block reported by Lizard's `duplicate` extension, minimum 70
-   tokens (`MIN_DUPLICATE_TOKENS`), all blocks, not only the 10 shown.
+   tokens by default (`min_duplicate_tokens`), all blocks, not only the 10 shown.
 
 Causes overlap. A line that is in a complex function inside a large file counts
 once. The four `*_percent` values report each cause on its own as a share of
@@ -166,7 +241,7 @@ quality or correctness. It is `null` when there are no analyzed files or no
 functions.
 
 `duplication_percent` (Lizard's token duplication rate) and
-`complex_functions_percent` (percent of functions with CCN > 10, by count) are
+`complex_functions_percent` (percent of functions above `max_complexity`, by count) are
 reference values and are not part of the score.
 
 ### Gaming the score
@@ -186,23 +261,24 @@ head.
 | `analyzer` | `{"name": "lizard", "version": ...}` |
 | `path` | Absolute path that was scanned. |
 | `score` | Integer 0..100, or `null`. |
+| `config` | Effective scoring limits and config exclusions. |
 | `formula` | The formula string. |
 | `total_lines` | Physical lines in all analyzed files. |
 | `unclean_lines` | Lines in the union of all causes. |
 | `clean_lines_percent` | `100 * (total_lines - unclean_lines) / total_lines`, 2 decimals. |
-| `complexity_percent` | Lines in functions with CCN > 10, as percent of `total_lines`. |
-| `length_percent` | Lines in functions longer than 100 lines, as percent of `total_lines`. |
-| `file_size_percent` | Lines in files longer than 750 lines, as percent of `total_lines`. |
+| `complexity_percent` | Lines in functions above `max_complexity`, as percent of `total_lines`. |
+| `length_percent` | Lines in functions above `max_function_lines`, as percent of `total_lines`. |
+| `file_size_percent` | Lines in files above `max_file_lines`, as percent of `total_lines`. |
 | `duplication_lines_percent` | Lines in duplicate blocks, as percent of `total_lines`. |
 | `duplication_percent` | Lizard token duplication rate. Reference only. |
-| `complex_functions_percent` | Percent of functions with CCN > 10 (by count). Reference only. |
+| `complex_functions_percent` | Percent of functions above `max_complexity` (by count). Reference only. |
 | `analyzed_files` | Number of files Lizard parsed. |
 | `analyzed_functions` | Number of functions found. |
 | `total_ccn` | Sum of cyclomatic complexity over all functions. |
 | `decision_points` | `total_ccn - analyzed_functions`: number of branches and conditions. Does not change when a function is split. |
 | `top_complexity` | Up to 10 functions: `file`, `line`, `name`, `ccn`. |
 | `long_functions` | Up to 10 functions: `file`, `line`, `name`, `nloc`. |
-| `largest_files` | Up to 10 files with more than 750 lines: `file`, `nloc`. |
+| `largest_files` | Up to 10 files above `max_file_lines`: `file`, `nloc`. |
 | `duplicates` | Up to 10 duplicate blocks: `lines` and `locations` (`file`, `start_line`, `end_line`). |
 | `skipped_unsupported` | Count of files without a Lizard reader, by extension. |
 | `diagnostics` | Supplemental metrics, not part of the score. See "Diagnostics". |
@@ -270,8 +346,9 @@ uv build
 npm pack --dry-run
 ```
 
-Tests cover the scanner, staged comparisons, baseline updates, and installation
-of the npm archive. The test workflow runs on Linux, macOS, and Windows.
+Tests cover the scanner, config limits, hook installation, staged comparisons,
+baseline updates, and installation of the npm archive. The test workflow runs
+on Linux, macOS, and Windows.
 
 For a release, set the same version in `package.json` and `pyproject.toml`, then
 run `uv lock` and the checks above. Inspect the npm archive contents before

@@ -2,8 +2,8 @@
 
 Score = 100 * clean_lines / total_lines over the analyzed files, measured by
 Lizard. A physical line is unclean when it is inside a function with cyclomatic
-complexity above CCN_THRESHOLD, a function longer than LONG_FUNCTION_NLOC
-lines, a file longer than LARGE_FILE_NLOC lines, or a duplicate block. Causes
+complexity above the configured limit, a long function, a large file,
+or a duplicate block. Causes
 overlap; a line counts once. This is a structural cleanliness index, not an
 AI-authorship detector and not proof of correctness.
 """
@@ -14,6 +14,7 @@ import io
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -23,16 +24,20 @@ from importlib.metadata import version
 import lizard
 from pathspec import GitIgnoreSpec
 
-CCN_THRESHOLD = 10
-LONG_FUNCTION_NLOC = 100
-MIN_DUPLICATE_TOKENS = 70
+CONFIG_NAME = "slopcheck.json"
+DEFAULT_CONFIG = {
+    "max_complexity": 10,
+    "max_function_lines": 100,
+    "max_file_lines": 750,
+    "min_duplicate_tokens": 70,
+    "exclude": [],
+}
 TOP_N = 10
 TINY_FUNCTION_NLOC = 2
 MAX_COMMIT_FILES = 50
 MIN_SHARED_COMMITS = 5
 MIN_COUPLING_RATIO = 0.8
 MIN_NAME_LEN = 4
-LARGE_FILE_NLOC = 750
 
 INTERFACE_DECL = re.compile(r"\binterface\s+(I[A-Z]\w*)")
 TYPE_BASES = re.compile(r"\b(?:class|record|struct)\s+(\w+)[^{;=]*?:\s*([^{;=]+)")
@@ -234,18 +239,47 @@ def diagnostics(root, rel, infos, functions):
     }
 
 
-def scan(root, excludes=()):
+def load_config(root):
+    path = os.path.join(root, CONFIG_NAME)
+    if os.path.islink(path):
+        raise ValueError(f"{CONFIG_NAME} must be a regular file, not a symlink")
+    if not os.path.exists(path):
+        return dict(DEFAULT_CONFIG)
+    if not os.path.isfile(path):
+        raise ValueError(f"{CONFIG_NAME} must be a regular file")
+    with open(path, encoding="utf-8") as fh:
+        settings = json.load(fh)
+    if not isinstance(settings, dict):
+        raise ValueError(f"{CONFIG_NAME} must contain a JSON object")
+    unknown = settings.keys() - DEFAULT_CONFIG.keys()
+    if unknown:
+        raise ValueError(f"{CONFIG_NAME}: unknown settings: {', '.join(sorted(unknown))}")
+    config = DEFAULT_CONFIG | settings
+    for name, value in config.items():
+        if name == "exclude":
+            if not isinstance(value, list) or any(not isinstance(p, str) or not p for p in value):
+                raise ValueError(f"{CONFIG_NAME}: exclude must be an array of nonempty strings")
+        elif type(value) is not int or value < 1:
+            raise ValueError(f"{CONFIG_NAME}: {name} must be a positive integer")
+    # Lizard builds samples from 31 tokens; smaller limits cannot detect smaller blocks.
+    if config["min_duplicate_tokens"] < 31:
+        raise ValueError(f"{CONFIG_NAME}: min_duplicate_tokens must be at least 31")
+    return config
+
+
+def scan(root, excludes=(), config=None):
     root = os.path.abspath(root)
+    config = load_config(root) if config is None else config
     rel = lambda p: os.path.relpath(p, root).replace(os.sep, "/")  # noqa: E731
-    supported, unsupported = select_files(root, excludes)
+    supported, unsupported = select_files(root, config["exclude"] + list(excludes))
     infos, dup_ext, failures, line_counts = analyze(supported)
 
     functions = [fn for info in infos for fn in info.function_list]
     total_ccn = sum(fn.cyclomatic_complexity for fn in functions)
-    complex_fns = [fn for fn in functions if fn.cyclomatic_complexity > CCN_THRESHOLD]
-    long_fns = [fn for fn in functions if fn.nloc > LONG_FUNCTION_NLOC]
-    large = sorted((info for info in infos if info.nloc > LARGE_FILE_NLOC), key=lambda i: (-i.nloc, rel(i.filename)))
-    blocks = list(dup_ext.get_duplicates(min_duplicate_tokens=MIN_DUPLICATE_TOKENS))
+    complex_fns = [fn for fn in functions if fn.cyclomatic_complexity > config["max_complexity"]]
+    long_fns = [fn for fn in functions if fn.nloc > config["max_function_lines"]]
+    large = sorted((info for info in infos if info.nloc > config["max_file_lines"]), key=lambda i: (-i.nloc, rel(i.filename)))
+    blocks = list(dup_ext.get_duplicates(min_duplicate_tokens=config["min_duplicate_tokens"]))
 
     causes = {"complexity": {}, "length": {}, "file_size": {}, "duplication_lines": {}}
     for fn in complex_fns:
@@ -293,8 +327,10 @@ def scan(root, excludes=()):
         "analyzer": {"name": "lizard", "version": version("lizard")},
         "path": root,
         "score": score,
-        "formula": "100 * clean_lines / total_lines; a line is unclean when it is in a function with CCN > 10, "
-                   "a function longer than 100 lines, a file longer than 750 lines, or a duplicate block",
+        "config": config,
+        "formula": f"100 * clean_lines / total_lines; a line is unclean when it is in a function with CCN > {config['max_complexity']}, "
+                   f"a function longer than {config['max_function_lines']} lines, a file longer than {config['max_file_lines']} lines, "
+                   f"or a duplicate block (minimum {config['min_duplicate_tokens']} tokens)",
         "total_lines": total_lines,
         "unclean_lines": unclean_lines,
         "clean_lines_percent": pct(100.0 * (total_lines - unclean_lines) / total_lines) if total_lines else None,
@@ -343,6 +379,7 @@ def _merge_overlapping(duplicates):
 
 
 def render_text(result):
+    config = result["config"]
     lines = [f"slopcheck — structural cleanliness score (lizard {result['analyzer']['version']})", ""]
     if result["score"] is None:
         reason = "no analyzed files" if result["analyzed_files"] == 0 else "no functions found"
@@ -353,11 +390,11 @@ def render_text(result):
     pct = lambda v: "n/a" if v is None else f"{v:.2f}%"  # noqa: E731
     lines += [
         "Unclean lines by cause (causes overlap):",
-        f"  Complex functions (CCN > {CCN_THRESHOLD}): {pct(result['complexity_percent'])}"
+        f"  Complex functions (CCN > {config['max_complexity']}): {pct(result['complexity_percent'])}"
         f"   ({pct(result['complex_functions_percent'])} of functions)",
-        f"  Long functions (> {LONG_FUNCTION_NLOC} lines): {pct(result['length_percent'])}",
-        f"  Large files (> {LARGE_FILE_NLOC} lines): {pct(result['file_size_percent'])}",
-        f"  Duplicate blocks: {pct(result['duplication_lines_percent'])}"
+        f"  Long functions (> {config['max_function_lines']} lines): {pct(result['length_percent'])}",
+        f"  Large files (> {config['max_file_lines']} lines): {pct(result['file_size_percent'])}",
+        f"  Duplicate blocks (>= {config['min_duplicate_tokens']} tokens): {pct(result['duplication_lines_percent'])}"
         f"   (token rate {pct(result['duplication_percent'])})",
         f"Analyzed: {result['analyzed_files']} files, {result['analyzed_functions']} functions",
         f"Decision points: {result['decision_points']} (total CCN {result['total_ccn']})",
@@ -432,10 +469,12 @@ def _snapshot(root, revision, destination, staged=False):
         mode, middle, last = metadata.split()
         if staged and last != b"0":
             raise ValueError("resolve index conflicts before running the ratchet")
+        if name == CONFIG_NAME.encode() and mode not in (b"100644", b"100755"):
+            raise ValueError(f"{CONFIG_NAME} must be a regular file")
         if mode not in (b"100644", b"100755"):
             continue  # Match the scanner: skip symlinks and unpopulated submodules.
         name = os.fsdecode(name)
-        if os.path.basename(name) != ".gitignore" and lizard.get_reader_for(name) is None:
+        if os.path.basename(name) not in (".gitignore", CONFIG_NAME) and lizard.get_reader_for(name) is None:
             continue
         path = os.path.abspath(os.path.join(destination, name))
         if os.path.commonpath([destination, path]) != destination:
@@ -460,26 +499,90 @@ def ratchet(root, base, staged=False, excludes=()):
     if _git(root, "rev-parse", "--show-prefix").strip():
         raise ValueError("--ratchet requires PATH to be the Git worktree root")
     summaries = []
-    for revision, use_index in ((base, False), ("HEAD", staged)):
-        label = "index" if use_index else revision
-        with tempfile.TemporaryDirectory(prefix="slopcheck-") as directory:
-            _snapshot(root, revision, directory, use_index)
-            result = scan(directory, excludes)
-        if result["failures"]:
-            names = ", ".join(f["file"] for f in result["failures"])
-            raise ValueError(f"{label}: parser failures prevent comparison: {names}")
-        if result["score"] is None:
-            raise ValueError(f"{label}: no score; cannot compare an empty or unsupported snapshot")
-        total, unclean = result["total_lines"], result["unclean_lines"]
-        summaries.append({"revision": label, "score": result["score"], "total_lines": total,
-                          "unclean_lines": unclean, "clean_lines_percent": 100 * (total - unclean) / total})
+    with tempfile.TemporaryDirectory(prefix="slopcheck-") as directory:
+        before_path, after_path = os.path.join(directory, "base"), os.path.join(directory, "candidate")
+        os.mkdir(before_path)
+        os.mkdir(after_path)
+        _snapshot(root, base, before_path)
+        _snapshot(root, "HEAD", after_path, staged)
+        config = load_config(after_path)
+        for label, path in ((base, before_path), ("index" if staged else "HEAD", after_path)):
+            result = scan(path, excludes, config)
+            if result["failures"]:
+                names = ", ".join(f["file"] for f in result["failures"])
+                raise ValueError(f"{label}: parser failures prevent comparison: {names}")
+            if result["score"] is None:
+                raise ValueError(f"{label}: no score; cannot compare an empty or unsupported snapshot")
+            total, unclean = result["total_lines"], result["unclean_lines"]
+            summaries.append({"revision": label, "score": result["score"], "total_lines": total,
+                              "unclean_lines": unclean, "clean_lines_percent": 100 * (total - unclean) / total})
     before, after = summaries
-    return {"base": before, "candidate": after,
+    return {"base": before, "candidate": after, "config": config,
             "passed": after["unclean_lines"] * before["total_lines"] <= before["unclean_lines"] * after["total_lines"]}
 
 
+def initialize(path):
+    root = os.fsdecode(_git(path, "rev-parse", "--show-toplevel")).strip()
+    load_config(root)  # Validate existing settings before changing anything.
+    hook = os.path.join(root, os.fsdecode(_git(root, "rev-parse", "--git-path", "hooks/pre-commit")).strip())
+    common = os.path.join(root, os.fsdecode(_git(root, "rev-parse", "--git-common-dir")).strip())
+    hook = os.path.abspath(hook)
+    hook_dir = os.path.dirname(hook)
+    if os.path.basename(hook_dir) == "_" and os.path.basename(os.path.dirname(hook_dir)) == ".husky":
+        hook = os.path.join(os.path.dirname(hook_dir), "pre-commit")
+    if (os.path.realpath(hook) != os.path.join(os.path.realpath(common), "hooks", "pre-commit")
+            and os.path.commonpath([os.path.realpath(root), os.path.realpath(hook)]) != os.path.realpath(root)):
+        raise ValueError("the hooks directory is outside this repository; install the ratchet command there manually")
+    if os.path.islink(hook):
+        raise ValueError("pre-commit is a symlink; add the ratchet command to its target manually")
+    content, mode = b"#!/bin/sh\n", 0o755
+    if os.path.exists(hook):
+        with open(hook, "rb") as fh:
+            content = fh.read()
+        mode = stat.S_IMODE(os.stat(hook).st_mode)
+    lines = content.splitlines(keepends=True)
+    if b"\0" in content or (lines and lines[0].startswith(b"#!") and not re.match(
+            rb"^#!\s*(?:/usr/bin/env\s+|/(?:usr/)?bin/)(?:sh|bash|dash|zsh|ksh)(?:\s|$)", lines[0])):
+        raise ValueError("pre-commit is not a supported shell script; add the ratchet command manually")
+    command = b'PATH="$PWD/node_modules/.bin:$PATH" slopcheck . --ratchet HEAD --staged || exit $?\n'
+    if command.rstrip() not in [line.rstrip() for line in lines]:
+        position = 1 if lines and lines[0].startswith(b"#!") else 0
+        if position and not lines[0].endswith(b"\n"):
+            lines[0] += b"\n"
+        lines.insert(position, command)
+        content = b"".join(lines)
+    config_path = os.path.join(root, CONFIG_NAME)
+    if not os.path.exists(config_path):
+        with open(config_path, "x", encoding="utf-8") as fh:
+            fh.write(json.dumps(DEFAULT_CONFIG, indent=2) + "\n")
+    os.makedirs(os.path.dirname(hook), exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=os.path.dirname(hook), delete=False) as fh:
+        temporary = fh.name
+        fh.write(content)
+    try:
+        os.chmod(temporary, mode | 0o111)
+        os.replace(temporary, hook)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    print(f"Configured {config_path}\nInstalled ratchet in {hook}\n"
+          "Commit slopcheck.json. Run slopcheck init in each clone. HEAD must exist before the hook can compare scores.")
+
+
 def run(argv=None):
-    parser = argparse.ArgumentParser(prog="slopcheck", description=__doc__.split("\n\n")[1])
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "init":
+        parser = argparse.ArgumentParser(prog="slopcheck init", description="Create slopcheck.json and install a pre-commit ratchet.")
+        parser.add_argument("path", nargs="?", default=".", help="Git worktree directory (default: current directory)")
+        args = parser.parse_args(argv[1:])
+        try:
+            initialize(args.path)
+        except (OSError, ValueError) as exc:
+            print(f"slopcheck: {exc}", file=sys.stderr)
+            return 2
+        return 0
+    parser = argparse.ArgumentParser(prog="slopcheck", description=__doc__.split("\n\n")[1],
+                                     epilog="Run slopcheck init [PATH] to create a config and install the pre-commit ratchet.")
     parser.add_argument("path", help="directory to scan (read-only)")
     parser.add_argument("--json", action="store_true", help="print JSON instead of text")
     parser.add_argument("--exclude", action="append", default=[], metavar="PATTERN",
@@ -507,7 +610,11 @@ def run(argv=None):
                   f"({'PASS' if result['passed'] else 'FAIL'})")
         return int(not result["passed"] or (
             args.fail_under is not None and result["candidate"]["score"] < args.fail_under))
-    result = scan(args.path, args.exclude)
+    try:
+        result = scan(args.path, args.exclude)
+    except (OSError, ValueError) as exc:
+        print(f"slopcheck: {exc}", file=sys.stderr)
+        return 2
     if args.json:
         print(json.dumps(result, indent=2))
     else:
