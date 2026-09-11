@@ -22,7 +22,7 @@ class NpmTests(unittest.TestCase):
             subprocess.run([shutil.which("npm"), "install", "--prefix", directory, "--ignore-scripts",
                             "--no-audit", "--no-fund", os.path.join(directory, archive["filename"])],
                            check=True, capture_output=True)
-            package = Path(directory, "node_modules", "@matttoppi", "slopcheck")
+            package = Path(directory, "node_modules", "@toppi", "slopcheck")
             cli = [shutil.which("node"), str(package / "cli" / "slopcheck.cjs")]
             executable = shutil.which("slopcheck", path=os.path.join(directory, "node_modules", ".bin"))
             self.assertIsNotNone(executable)

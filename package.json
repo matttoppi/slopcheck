@@ -1,5 +1,5 @@
 {
-  "name": "@matttoppi/slopcheck",
+  "name": "@toppi/slopcheck",
   "version": "0.1.0",
   "license": "MIT",
   "description": "Structural cleanliness scores and a Git score ratchet, powered by Lizard",

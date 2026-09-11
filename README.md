@@ -19,14 +19,14 @@ The npm package launches the Python scanner. `uv` manages Python 3.10+ and
 installs the dependencies from the included lockfile on the first run.
 Later runs reuse that environment. There is no npm install script.
 
-After the first npm release:
+Install from npm:
 
 ```sh
-npm install --save-dev --save-exact @matttoppi/slopcheck@0.1.0
+npm install --save-dev --save-exact @toppi/slopcheck@0.1.0
 npx --no-install slopcheck .
 ```
 
-Before npm publication, install from the public GitHub repository:
+To use the development version, install from GitHub:
 
 ```sh
 npm install --save-dev github:matttoppi/slopcheck#main
@@ -34,10 +34,10 @@ npm install --save-dev github:matttoppi/slopcheck#main
 
 Commit the npm lockfile to retain the resolved Git commit.
 
-For a one-off scan after publication:
+For a one-off scan:
 
 ```sh
-npx --yes @matttoppi/slopcheck@0.1.0 . --json
+npx --yes @toppi/slopcheck@0.1.0 . --json
 ```
 
 ### Python
@@ -181,7 +181,7 @@ hook must fail if the tool is missing. No Husky dependency is required.
 ### Continuous integration
 
 For a GitHub pull request, check the proposed merge against the target commit.
-After publishing the package, add a required job like this to your workflow:
+Add a required job like this to your workflow:
 
 ```yaml
 slopcheck:
@@ -201,7 +201,7 @@ slopcheck:
     - name: Reject a lower score
       env:
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
-      run: npx --yes @matttoppi/slopcheck@0.1.0 . --ratchet "$BASE_SHA"
+      run: npx --yes @toppi/slopcheck@0.1.0 . --ratchet "$BASE_SHA"
 ```
 
 Use this job on the `pull_request` event. Keep the full history so the base
@@ -355,8 +355,7 @@ run `uv lock` and the checks above. Inspect the npm archive contents before
 publication. The archive includes the scanner and lockfile; it does not include
 the scanned repository or a virtual environment.
 
-After the public GitHub repository is ready, log into the npm account that owns
-the `@matttoppi` scope and run:
+Log into the npm account that owns the `@toppi` scope and run:
 
 ```sh
 npm login
